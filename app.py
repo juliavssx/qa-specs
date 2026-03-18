@@ -72,7 +72,7 @@ def render_info_bar(formato, peso, dimensao):
 with st.sidebar:
     st.title("🛠️ Smart QA Toolbox")
     modo = st.radio("Selecione a Ferramenta:", ["Scanner & Safe Areas", "Comparador (V1 vs V2)"])
-    st.markdown("---")
+    st.markdown("---")git add app.py
 
 # --- MODO 1: SCANNER ---
 if modo == "Scanner & Safe Areas":
