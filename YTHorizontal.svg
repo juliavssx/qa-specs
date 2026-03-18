@@ -1,0 +1,23 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_538_290)">
+<g opacity="0.4">
+<path fill-rule="evenodd" clip-rule="evenodd" d="M0 183V693V1080H38H1758H1920V693V133V-0.000244141H1758H1445H496H38H0V183ZM1758 693V133H1445V37.9998H496V183H38V693H1758Z" fill="#FF3239"/>
+<g opacity="0.6">
+<rect x="1327" y="958" width="543" height="72" rx="36" fill="white"/>
+<rect x="50" y="918" width="1820" height="16" rx="8" fill="white"/>
+<rect x="1555" y="774" width="315" height="120" rx="16" fill="white"/>
+<rect x="1555" y="49.9998" width="315" height="53" rx="20" fill="white"/>
+<rect x="30" y="49.9998" width="415" height="89" rx="16" fill="white"/>
+<rect x="50" y="728" width="513" height="166" rx="16" fill="white"/>
+<circle cx="86" cy="994" r="36" fill="white"/>
+<circle cx="188" cy="994" r="36" fill="white"/>
+<circle cx="290" cy="994" r="36" fill="white"/>
+</g>
+</g>
+</g>
+<defs>
+<clipPath id="clip0_538_290">
+<rect width="1080" height="1920" fill="white" transform="translate(0 1080) rotate(-90)"/>
+</clipPath>
+</defs>
+</svg>
