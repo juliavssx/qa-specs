@@ -1,133 +1,104 @@
 import streamlit as st
-import base64
+from PIL import Image, ImageDraw, ImageFont
 import os
-import zipfile
-import re
-from PIL import Image
-from pymediainfo import MediaInfo 
-import tempfile
 
-# 1. Configuração da Página
-st.set_page_config(page_title="QA Hub Smart Scanner", layout="wide", page_icon="🎯")
+# --- Configuração da Página ---
+st.set_page_config(page_title="QA Hub - Smart Specs", layout="centered")
 
-# --- FUNÇÕES DE SUPORTE ---
+# Dicionário com ficheiros e dimensões esperadas
+SAFE_AREAS = {
+    "Adstream/TV (Manual)": {"file": "Adstream_1920x1080.png", "width": 1920, "height": 1080},
+    "YouTube Horizontal": {"file": "YTHorizontal.svg", "width": 1920, "height": 1080},
+    "YouTube Shorts": {"file": "YT_Shorts_1080x1920.png", "width": 1080, "height": 1920},
+    "Meta Reel": {"file": "Meta_Reel_1080x1920.png", "width": 1080, "height": 1920},
+    "Meta Stories": {"file": "Meta_Stories_1080x1920.png", "width": 1080, "height": 1920},
+    "TikTok": {"file": "Tiktok_Topview_e_Infeed Ads_540x960.png", "width": 540, "height": 960},
+    "Pinterest": {"file": "Pinterest_1080x1920.png", "width": 1080, "height": 1920}
+}
 
-def analisar_video_completo(uploaded_file):
-    """Extrai metadados de vídeo para a barra de status e validação Adstream"""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp:
-        tmp.write(uploaded_file.getvalue())
-        tmp_path = tmp.name
+def validate_dimensions(img, target_w, target_h):
+    """Verifica se a proporção da imagem bate com o esperado"""
+    actual_ratio = img.width / img.height
+    target_ratio = target_w / target_h
+    # Tolerância de 1% para pequenas variações
+    return abs(actual_ratio - target_ratio) < 0.01
 
-    media_info = MediaInfo.parse(tmp_path)
-    v = next((t for t in media_info.tracks if t.track_type == "Video"), None)
-    a = next((t for t in media_info.tracks if t.track_type == "Audio"), None)
+def process_qa_view(image_file, config, modo_nome):
+    img_orig = Image.open(image_file).convert("RGBA")
+    real_w, real_h = img_orig.size
     
-    info = {
-        "dimensao": f"{v.width}x{v.height}" if v else "N/A",
-        "formato": uploaded_file.name.split('.')[-1].upper(),
-        "peso": f"{uploaded_file.size / (1024*1024):.2f} MB",
-        "v_track": v,
-        "a_track": a
-    }
-    os.remove(tmp_path)
-    return info
+    # --- BARREIRA DE VALIDAÇÃO ---
+    if not validate_dimensions(img_orig, config["width"], config["height"]):
+        st.error(f"⚠️ **Formato Incorreto!** A imagem enviada não possui a proporção correta para {modo_nome}. Esperado: {config['width']}x{config['height']}.")
+        return None
 
-def get_local_img_b64(file_name):
-    for ext in [".svg", ".SVG", ".png", ".jpg"]:
-        path = f"{file_name}{ext}"
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                b64_data = base64.b64encode(f.read()).decode()
-                mime = "image/svg+xml" if "svg" in ext.lower() else "image/png"
-                return b64_data, mime
-    return None, None
+    # Aplica Safe Area
+    overlay_filename = config["file"]
+    if overlay_filename and os.path.exists(overlay_filename):
+        try:
+            overlay = Image.open(overlay_filename).convert("RGBA")
+            overlay = overlay.resize((real_w, real_h), Image.Resampling.LANCZOS)
+            img_orig = Image.alpha_composite(img_orig, overlay)
+        except:
+            pass
 
-# 2. Estilização CSS
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600&display=swap');
-    html, body, [class*="css"] { font-family: 'Sora', sans-serif; background-color: #0e0e12; color: white; }
-    .info-bar-container {
-        background-color: #ffffff; color: #000000; padding: 10px 20px;
-        border-radius: 0 0 12px 12px; display: flex; justify-content: space-between;
-        align-items: center; margin-top: -5px; border: 1px solid #ddd;
-        font-weight: 600; font-size: 13px; text-transform: uppercase;
-    }
-    .status-card { background: #1c1c24; padding: 15px; border-radius: 12px; border: 1px solid #2d2d3a; margin-bottom: 10px; }
-    .metric-label { font-size: 10px; color: #888; text-transform: uppercase; }
-    .metric-value { font-size: 16px; font-weight: 600; color: #00ffcc; }
-</style>
-""", unsafe_allow_html=True)
+    # Redimensionamento para Display (Visualização no Site)
+    display_width = 750
+    ratio = display_width / real_w
+    display_height = int(real_h * ratio)
+    img_display = img_orig.resize((display_width, display_height), Image.Resampling.LANCZOS)
+    
+    # Criação do Canvas Estilizado (Igual à sua referência)
+    padding = 20
+    bar_h = 50
+    canvas_w = display_width + (padding * 2)
+    canvas_h = display_height + bar_h + (padding * 2)
+    
+    # Cor de fundo escura (Dark Mode)
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (18, 18, 24, 255))
+    draw = ImageDraw.Draw(canvas)
+    
+    # Cola a imagem centralizada
+    canvas.paste(img_display, (padding, padding))
+    
+    # Desenha a Barra Branca de Specs
+    bar_y_start = padding + display_height
+    draw.rectangle([padding, bar_y_start, padding + display_width, bar_y_start + bar_h], fill="white")
+    
+    # Informações de Texto
+    ext = image_file.name.split('.')[-1].upper()
+    peso_calc = image_file.size/1024/1024
+    peso = f"{peso_calc:.2f} MB" if peso_calc > 1 else f"{image_file.size/1024:.0f} KB"
+    
+    try:
+        # Tenta carregar uma fonte Bold do sistema
+        font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+        if not os.path.exists(font_path):
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        f_bold = ImageFont.truetype(font_path, 14)
+    except:
+        f_bold = ImageFont.load_default()
 
-def render_info_bar(formato, peso, dimensao):
-    st.markdown(f"""
-        <div class="info-bar-container">
-            <span>FORMATO: {formato}</span>
-            <span>PESO: {peso}</span>
-            <span>DIMENSÃO: {dimensao}</span>
-        </div>
-    """, unsafe_allow_html=True)
+    # Escreve os textos na barra branca
+    text_y = bar_y_start + (bar_h // 2) - 7
+    draw.text((padding + 20, text_y), f"FORMATO: {ext}", fill="black", font=f_bold)
+    draw.text((canvas_w // 2 - 40, text_y), f"PESO: {peso}", fill="black", font=f_bold)
+    draw.text((canvas_w - padding - 185, text_y), f"DIMENSÃO: {real_w}X{real_h}", fill="black", font=f_bold)
+    
+    return canvas
 
-# --- SIDEBAR ---
+# --- Interface Streamlit ---
+st.title("🚀 QA Hub - Smart Specs")
+
 with st.sidebar:
-    st.title("🛠️ Smart QA Toolbox")
-    modo = st.radio("Selecione a Ferramenta:", ["Scanner & Safe Areas", "Comparador (V1 vs V2)"])
-    st.markdown("---")git add app.py
+    st.header("Configurações")
+    modo = st.selectbox("Selecione o Veículo:", list(SAFE_AREAS.keys()))
+    arquivo = st.file_uploader("Suba o arquivo:", type=["png", "jpg", "jpeg"])
 
-# --- MODO 1: SCANNER ---
-if modo == "Scanner & Safe Areas":
-    plataforma = st.sidebar.selectbox("Plataforma / Destino:", 
-                                     ["YouTube (Automático)", "Adstream/TV (Manual)", "Meta (Manual)", "TikTok"])
-    upload = st.sidebar.file_uploader("Upload do Asset", type=["png", "jpg", "mp4", "mov", "zip"], key="main_up")
+if arquivo:
+    # Chama a função de processamento
+    view = process_qa_view(arquivo, SAFE_AREAS[modo], modo)
     
-    if upload:
-        ext = upload.name.split('.')[-1].lower()
-        
-        # Lógica de Captura de Dados
-        if ext in ['mp4', 'mov']:
-            data = analisar_video_completo(upload)
-            dim, format_name, peso_str = data['dimensao'], data['formato'], data['peso']
-        else:
-            img = Image.open(upload)
-            dim, format_name, peso_str = f"{img.size[0]}x{img.size[1]}", ext.upper(), f"{upload.size/(1024*1024):.2f} MB"
-
-        # Lógica de Safe Areas
-        safe_key = "Adstream_1920x1080" if plataforma == "Adstream/TV (Manual)" else "YTHorizontal"
-        label_display = plataforma
-
-        col_v, col_s = st.columns([1.6, 1])
-        with col_v:
-            if ext in ['mp4', 'mov']: st.video(upload)
-            else: st.image(upload, use_container_width=True)
-            
-            render_info_bar(format_name, peso_str, dim) # Barra Branca Universal
-
-            if plataforma == "Adstream/TV (Manual)" and ext in ['mp4', 'mov']:
-                st.markdown("### 🔍 Relatório de Specs (PDF Adstream)")
-                v, a = data['v_track'], data['a_track']
-                if v and a:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.info(f"FPS 29.97: {'✅' if float(v.frame_rate) == 29.97 else '❌'} ({v.frame_rate})")
-                        st.info(f"Scan: {'✅' if v.scan_type == 'Interlaced' else '❌'} ({v.scan_type})")
-                    with c2:
-                        st.info(f"Audio 24bit: {'✅' if a.bit_depth == 24 else '❌'}")
-                        st.info(f"Sample 48kHz: {'✅' if int(a.sampling_rate) == 48000 else '❌'}")
-
-# --- MODO 2: COMPARADOR ---
-elif modo == "Comparador (V1 vs V2)":
-    st.subheader("↔️ Comparador de Versões")
-    v1 = st.sidebar.file_uploader("V1", type=["png", "jpg", "mp4", "mov"], key="v1")
-    v2 = st.sidebar.file_uploader("V2", type=["png", "jpg", "mp4", "mov"], key="v2")
-    c1, c2 = st.columns(2)
-    for i, file in enumerate([v1, v2]):
-        if file:
-            with (c1 if i==0 else c2):
-                if file.name.lower().endswith(('mp4', 'mov')):
-                    st.video(file)
-                    d = analisar_video_completo(file)
-                    render_info_bar(d['formato'], d['peso'], d['dimensao'])
-                else:
-                    st.image(file)
-                    img = Image.open(file)
-                    render_info_bar(file.name.split('.')[-1].upper(), f"{file.size/(1024*1024):.2f} MB", f"{img.size[0]}x{img.size[1]}")
+    if view:
+        st.image(view, use_container_width=True)
+        st.success(f"✅ Preview gerado com sucesso!")
