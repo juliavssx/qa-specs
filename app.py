@@ -1,204 +1,133 @@
 import streamlit as st
+import base64
+import os
+import zipfile
+import re
 from PIL import Image
-from datetime import datetime
+from pymediainfo import MediaInfo 
+import tempfile
 
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
+# 1. Configuração da Página
+st.set_page_config(page_title="QA Hub Smart Scanner", layout="wide", page_icon="🎯")
 
-st.set_page_config(page_title="QA Specs", layout="wide")
+# --- FUNÇÕES DE SUPORTE ---
 
-# 📐 DETECTAR FORMATO
-def detectar_formato(width, height):
-    ratio = round(width / height, 2)
+def analisar_video_completo(uploaded_file):
+    """Extrai metadados de vídeo para a barra de status e validação Adstream"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp:
+        tmp.write(uploaded_file.getvalue())
+        tmp_path = tmp.name
 
-    if ratio == 0.56:
-        return "Story"
-    elif ratio == 1:
-        return "Quadrado"
-    elif ratio == 1.91:
-        return "Feed"
-    else:
-        return "Fora do padrão"
+    media_info = MediaInfo.parse(tmp_path)
+    v = next((t for t in media_info.tracks if t.track_type == "Video"), None)
+    a = next((t for t in media_info.tracks if t.track_type == "Audio"), None)
+    
+    info = {
+        "dimensao": f"{v.width}x{v.height}" if v else "N/A",
+        "formato": uploaded_file.name.split('.')[-1].upper(),
+        "peso": f"{uploaded_file.size / (1024*1024):.2f} MB",
+        "v_track": v,
+        "a_track": a
+    }
+    os.remove(tmp_path)
+    return info
 
-# 🚀 VEÍCULO
-def detectar_veiculo(formato):
-    if formato == "Story":
-        return "Instagram Stories / TikTok"
-    elif formato == "Quadrado":
-        return "Instagram Feed"
-    elif formato == "Feed":
-        return "Facebook / YouTube Ads"
-    else:
-        return "Formato não identificado"
+def get_local_img_b64(file_name):
+    for ext in [".svg", ".SVG", ".png", ".jpg"]:
+        path = f"{file_name}{ext}"
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                b64_data = base64.b64encode(f.read()).decode()
+                mime = "image/svg+xml" if "svg" in ext.lower() else "image/png"
+                return b64_data, mime
+    return None, None
 
-# 📄 PDF
-def gerar_pdf(nome, score, arquivo_nome, tamanho_mb, formato):
-
-    doc = SimpleDocTemplate(nome)
-    styles = getSampleStyleSheet()
-
-    elementos = []
-
-    # "LOGO"
-    elementos.append(Paragraph("<b>QA Specs</b>", styles['Title']))
-    elementos.append(Spacer(1, 12))
-
-    # SCORE
-    elementos.append(Paragraph(f"<b>Score:</b> {score}/10", styles['Heading2']))
-    elementos.append(Spacer(1, 20))
-
-    veiculo = detectar_veiculo(formato)
-
-    dados = [
-        ["Arquivo", arquivo_nome],
-        ["Tamanho", f"{round(tamanho_mb,2)} MB"],
-        ["Formato", formato],
-        ["Veículo sugerido", veiculo]
-    ]
-
-    tabela = Table(dados, colWidths=[150, 300])
-
-    tabela.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
-    ]))
-
-    elementos.append(tabela)
-
-    doc.build(elementos)
-
-# 🎨 UI
+# 2. Estilização CSS
 st.markdown("""
 <style>
-body {background:#0f1117;color:white;}
-
-.card {
-    background:#1c1f26;
-    padding:20px;
-    border-radius:16px;
-    margin-bottom:20px;
-    box-shadow: 0 6px 30px rgba(0,0,0,0.4);
-}
-
-.aprovado {color:#00ffae;}
-.alerta {color:#ffd166;}
-.reprovado {color:#ff4d6d;}
-
-.score {
-    font-size:50px;
-    font-weight:700;
-}
-
-/* BOTÃO ROXO */
-.stButton > button {
-    background: linear-gradient(135deg, #6c5ce7, #a29bfe);
-    color: white;
-    border: none;
-    padding: 12px 18px;
-    border-radius: 12px;
-    font-weight: 600;
-    transition: 0.2s;
-}
-
-.stButton > button:hover {
-    transform: scale(1.03);
-    opacity: 0.9;
-}
+    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600&display=swap');
+    html, body, [class*="css"] { font-family: 'Sora', sans-serif; background-color: #0e0e12; color: white; }
+    .info-bar-container {
+        background-color: #ffffff; color: #000000; padding: 10px 20px;
+        border-radius: 0 0 12px 12px; display: flex; justify-content: space-between;
+        align-items: center; margin-top: -5px; border: 1px solid #ddd;
+        font-weight: 600; font-size: 13px; text-transform: uppercase;
+    }
+    .status-card { background: #1c1c24; padding: 15px; border-radius: 12px; border: 1px solid #2d2d3a; margin-bottom: 10px; }
+    .metric-label { font-size: 10px; color: #888; text-transform: uppercase; }
+    .metric-value { font-size: 16px; font-weight: 600; color: #00ffcc; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("QA Specs")
+def render_info_bar(formato, peso, dimensao):
+    st.markdown(f"""
+        <div class="info-bar-container">
+            <span>FORMATO: {formato}</span>
+            <span>PESO: {peso}</span>
+            <span>DIMENSÃO: {dimensao}</span>
+        </div>
+    """, unsafe_allow_html=True)
 
-arquivo = st.file_uploader("Upload", type=["png","jpg","jpeg","mp4","mov"])
+# --- SIDEBAR ---
+with st.sidebar:
+    st.title("🛠️ Smart QA Toolbox")
+    modo = st.radio("Selecione a Ferramenta:", ["Scanner & Safe Areas", "Comparador (V1 vs V2)"])
+    st.markdown("---")
 
-score = 0
-formato = "N/A"
-tamanho_mb = 0
-
-# 🖼️ ANÁLISE
-if arquivo:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-
-    tamanho_mb = arquivo.size / (1024 * 1024)
-
-    st.write(f"📄 Nome: {arquivo.name}")
-    st.write(f"📦 Tamanho: {round(tamanho_mb,2)} MB")
-
-    # 📦 PESO
-    if tamanho_mb <= 200:
-        score += 3
-    else:
-        st.error("Arquivo maior que 200MB")
-
-    arquivo.seek(0)
-
-    # 🖼️ IMAGEM
-    if "image" in arquivo.type:
-        imagem = Image.open(arquivo)
-        st.image(imagem, width='stretch')
-
-        largura, altura = imagem.size
-        formato = detectar_formato(largura, altura)
-
-        st.write(f"📐 {largura}x{altura}")
-        st.write(f"🎯 {formato}")
-
-        if formato != "Fora do padrão":
-            score += 3
+# --- MODO 1: SCANNER ---
+if modo == "Scanner & Safe Areas":
+    plataforma = st.sidebar.selectbox("Plataforma / Destino:", 
+                                     ["YouTube (Automático)", "Adstream/TV (Manual)", "Meta (Manual)", "TikTok"])
+    upload = st.sidebar.file_uploader("Upload do Asset", type=["png", "jpg", "mp4", "mov", "zip"], key="main_up")
+    
+    if upload:
+        ext = upload.name.split('.')[-1].lower()
+        
+        # Lógica de Captura de Dados
+        if ext in ['mp4', 'mov']:
+            data = analisar_video_completo(upload)
+            dim, format_name, peso_str = data['dimensao'], data['formato'], data['peso']
         else:
-            st.warning("Formato fora do padrão")
+            img = Image.open(upload)
+            dim, format_name, peso_str = f"{img.size[0]}x{img.size[1]}", ext.upper(), f"{upload.size/(1024*1024):.2f} MB"
 
-        if largura >= 1080:
-            score += 2
+        # Lógica de Safe Areas
+        safe_key = "Adstream_1920x1080" if plataforma == "Adstream/TV (Manual)" else "YTHorizontal"
+        label_display = plataforma
 
-    # 🎥 VÍDEO
-    elif "video" in arquivo.type:
-        st.video(arquivo)
-        score += 2
-        formato = "Vídeo"
+        col_v, col_s = st.columns([1.6, 1])
+        with col_v:
+            if ext in ['mp4', 'mov']: st.video(upload)
+            else: st.image(upload, use_container_width=True)
+            
+            render_info_bar(format_name, peso_str, dim) # Barra Branca Universal
 
-    # 📁 NOME
-    if "_" in arquivo.name:
-        score += 2
+            if plataforma == "Adstream/TV (Manual)" and ext in ['mp4', 'mov']:
+                st.markdown("### 🔍 Relatório de Specs (PDF Adstream)")
+                v, a = data['v_track'], data['a_track']
+                if v and a:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.info(f"FPS 29.97: {'✅' if float(v.frame_rate) == 29.97 else '❌'} ({v.frame_rate})")
+                        st.info(f"Scan: {'✅' if v.scan_type == 'Interlaced' else '❌'} ({v.scan_type})")
+                    with c2:
+                        st.info(f"Audio 24bit: {'✅' if a.bit_depth == 24 else '❌'}")
+                        st.info(f"Sample 48kHz: {'✅' if int(a.sampling_rate) == 48000 else '❌'}")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-score = min(score, 10)
-
-# 🎯 RESULTADO
-st.markdown('<div class="card">', unsafe_allow_html=True)
-
-if score >= 8:
-    status = "aprovado"
-    label = "APROVADO"
-elif score >= 5:
-    status = "alerta"
-    label = "ATENÇÃO"
-else:
-    status = "reprovado"
-    label = "REPROVADO"
-
-st.markdown(f"<p class='score {status}'>{score}/10</p>", unsafe_allow_html=True)
-st.markdown(f"<p class='{status}'>{label}</p>", unsafe_allow_html=True)
-
-st.progress(score / 10)
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# 📄 DOWNLOAD PDF
-if arquivo:
-    if st.button("Gerar relatório"):
-
-        nome = f"qa_specs_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-
-        gerar_pdf(nome, score, arquivo.name, tamanho_mb, formato)
-
-        with open(nome, "rb") as f:
-            st.download_button(
-                "Baixar PDF",
-                f,
-                file_name=nome,
-                mime="application/pdf"
-            )
+# --- MODO 2: COMPARADOR ---
+elif modo == "Comparador (V1 vs V2)":
+    st.subheader("↔️ Comparador de Versões")
+    v1 = st.sidebar.file_uploader("V1", type=["png", "jpg", "mp4", "mov"], key="v1")
+    v2 = st.sidebar.file_uploader("V2", type=["png", "jpg", "mp4", "mov"], key="v2")
+    c1, c2 = st.columns(2)
+    for i, file in enumerate([v1, v2]):
+        if file:
+            with (c1 if i==0 else c2):
+                if file.name.lower().endswith(('mp4', 'mov')):
+                    st.video(file)
+                    d = analisar_video_completo(file)
+                    render_info_bar(d['formato'], d['peso'], d['dimensao'])
+                else:
+                    st.image(file)
+                    img = Image.open(file)
+                    render_info_bar(file.name.split('.')[-1].upper(), f"{file.size/(1024*1024):.2f} MB", f"{img.size[0]}x{img.size[1]}")
