@@ -1,3 +1,4 @@
 streamlit
 Pillow
-pymediainfo
+opencv-python-headless
+beautifulsoup4
