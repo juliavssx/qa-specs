@@ -6,14 +6,20 @@ import tempfile
 import os
 import zipfile
 from bs4 import BeautifulSoup
+import time
 
 # --- Configuração da Página ---
-st.set_page_config(page_title="QA Hub - Smart Specs", layout="wide")
+st.set_page_config(
+    page_title="QA Hub - Smart Specs", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# --- Constantes ---
 SAFE_AREAS = {
     "Adstream/TV (Manual)": {"file": "Adstream_1920x1080.png", "width": 1920, "height": 1080},
     "Google/DCM (HTML5)": {"file": None, "width": None, "height": None},
-    "YouTube Horizontal": {"file": "YTHorizontal.svg", "width": 1920, "height": 1080},
+    "YouTube Horizontal": {"file": "YTHorizontal.png", "width": 1920, "height": 1080},
     "YouTube Shorts": {"file": "YT_Shorts_1080x1920.png", "width": 1080, "height": 1920},
     "Meta Reel": {"file": "Meta_Reel_1080x1920.png", "width": 1080, "height": 1920},
     "Meta Stories": {"file": "Meta_Stories_1080x1920.png", "width": 1080, "height": 1920},
@@ -21,16 +27,35 @@ SAFE_AREAS = {
     "Pinterest": {"file": "Pinterest_1080x1920.png", "width": 1080, "height": 1920}
 }
 
+# Limite máximo de upload total (em MB)
+MAX_UPLOAD_SIZE_MB = 500
+MAX_FILES = 10
+
 # --- Funções de Suporte ---
-def get_file_size(file):
+def get_file_size_bytes(file):
+    """Retorna o tamanho do arquivo em bytes"""
+    if hasattr(file, 'size'):
+        return file.size
+    return 0
+
+def get_file_size_formatted(size_bytes):
     """Retorna o peso do arquivo formatado"""
-    size_bytes = file.size
     if size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
     else:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
 
+def validate_total_size(files):
+    """Valida se o tamanho total dos arquivos não excede o limite"""
+    total_bytes = sum([get_file_size_bytes(f) for f in files])
+    total_mb = total_bytes / (1024 * 1024)
+    if total_mb > MAX_UPLOAD_SIZE_MB:
+        st.error(f"❌ Tamanho total excede o limite de {MAX_UPLOAD_SIZE_MB}MB (Atual: {total_mb:.1f}MB)")
+        return False
+    return True
+
 def analyze_video(uploaded_file):
+    """Analisa vídeo e retorna dimensões e FPS"""
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
         tmp.write(uploaded_file.read())
         video_path = tmp.name
@@ -40,9 +65,12 @@ def analyze_video(uploaded_file):
     fps    = round(cap.get(cv2.CAP_PROP_FPS), 2)
     cap.release()
     os.unlink(video_path)
+    # Reset file pointer for future reads
+    uploaded_file.seek(0)
     return width, height, fps
 
 def apply_safe_area(img_orig, config, opacity):
+    """Aplica overlay de safe area na imagem"""
     real_w, real_h = img_orig.size
     overlay_filename = config.get("file")
     if overlay_filename and os.path.exists(overlay_filename):
@@ -51,22 +79,28 @@ def apply_safe_area(img_orig, config, opacity):
         alpha = overlay.getchannel('A')
         new_alpha = alpha.point(lambda i: i * opacity)
         overlay.putalpha(new_alpha)
-        return Image.alpha_composite(img_orig, overlay)
+        return Image.alpha_composite(img_orig.convert("RGBA"), overlay)
     return img_orig
 
 def clean_size_format(raw_meta):
-    if not raw_meta: return "⚠️ N/A"
+    """Limpa e formata meta tag de tamanho"""
+    if not raw_meta: 
+        return "⚠️ N/A"
     clean = raw_meta.lower().replace("width=", "").replace("height=", "").replace(" ", "").replace(",", "x")
     return clean
 
 def validate_html5_package(zip_file):
+    """Valida pacote HTML5"""
     report = {
         "html_found": False, "click_tag": False, "size_meta": None, 
-        "file_path": "", "raw_html": "", "type": "Desconhecido", "kb_size": zip_file.size / 1024
+        "file_path": "", "raw_html": "", "type": "Desconhecido", 
+        "kb_size": zip_file.size / 1024,
+        "files_list": []
     }
     try:
         with zipfile.ZipFile(zip_file, 'r') as z:
             all_files = z.namelist()
+            report["files_list"] = [f for f in all_files if not f.startswith('__MACOSX')]
             html_files = [f for f in all_files if f.lower().endswith('.html') and not "__MACOSX" in f]
             if html_files:
                 target_path = html_files[0]
@@ -86,73 +120,246 @@ def validate_html5_package(zip_file):
                         report["type"] = "Portal (Nacional)"
                     if "clickTag" in content or "clicktag" in content.lower():
                         report["click_tag"] = True
-    except: pass
+    except Exception as e:
+        st.warning(f"Erro ao analisar ZIP: {str(e)}")
+    # Reset file pointer
+    zip_file.seek(0)
     return report
+
+def process_file(arquivo, modo, opacidade):
+    """Processa um único arquivo e retorna os resultados"""
+    ext = arquivo.name.split('.')[-1].lower()
+    config = SAFE_AREAS[modo]
+    resultado = {
+        "nome": arquivo.name,
+        "tipo": ext,
+        "tamanho": get_file_size_bytes(arquivo),
+        "detalhes": {}
+    }
+    
+    # Processamento por tipo
+    if ext == "zip":
+        resultado["detalhes"] = validate_html5_package(arquivo)
+    elif ext in ["mp4", "mov"]:
+        try:
+            w, h, fps = analyze_video(arquivo)
+            resultado["detalhes"] = {
+                "resolucao": f"{w}x{h}",
+                "fps": fps,
+                "fps_ok": abs(fps - 29.97) < 0.1
+            }
+        except Exception as e:
+            resultado["erro"] = str(e)
+    elif ext in ["png", "jpg", "jpeg"]:
+        try:
+            img = Image.open(arquivo)
+            resultado["detalhes"] = {
+                "dimensoes": f"{img.width}x{img.height}",
+                "img_obj": img,
+                "config": config,
+                "opacidade": opacidade
+            }
+        except Exception as e:
+            resultado["erro"] = str(e)
+    
+    return resultado
+
+def display_file_result(resultado, modo):
+    """Exibe o resultado do processamento de um arquivo"""
+    with st.container():
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.markdown(f"**📄 {resultado['nome']}**")
+            st.caption(f"Tipo: {resultado['tipo'].upper()} | Tamanho: {get_file_size_formatted(resultado['tamanho'])}")
+        
+        with col2:
+            if "erro" in resultado:
+                st.error(f"❌ Erro: {resultado['erro']}")
+            elif resultado['tipo'] == "zip":
+                report = resultado["detalhes"]
+                if report["html_found"]:
+                    st.success(f"✅ HTML5 - {report['type']}")
+                    with st.expander("Ver detalhes do ZIP"):
+                        st.metric("Peso do ZIP", f"{report['kb_size']:.1f} KB")
+                        st.metric("ClickTag", "✅ OK" if report["click_tag"] else "❌ AUSENTE")
+                        if report["size_meta"]:
+                            st.metric("Formato", report["size_meta"])
+                        if report["files_list"]:
+                            st.write("Arquivos no ZIP:", ", ".join(report["files_list"][:5]))
+                else:
+                    st.error("❌ Nenhum arquivo HTML encontrado")
+            elif resultado['tipo'] in ["mp4", "mov"]:
+                det = resultado["detalhes"]
+                st.metric("Resolução", det["resolucao"])
+                fps_status = "✅ OK" if det["fps_ok"] else "❌ Erro"
+                st.metric("FPS", f"{det['fps']}", delta=fps_status)
+                if modo == "Adstream/TV (Manual)":
+                    st.info("**Checklist Adstream:**\n- Loudness: -23/-24 LUFS\n- Timeline: Claquete+Black")
+            elif resultado['tipo'] in ["png", "jpg", "jpeg"]:
+                det = resultado["detalhes"]
+                img_with_safe = apply_safe_area(det["img_obj"], det["config"], det["opacidade"])
+                st.image(img_with_safe, use_container_width=True)
+                st.caption(f"Dimensões: {det['dimensoes']}")
 
 # --- Sidebar ---
 with st.sidebar:
     st.title("🛠️ Smart QA Toolbox")
-    ferramenta = st.radio("Selecione a Ferramenta:", ["Scanner & Safe Areas", "Comparador (V1 vs V2)"])
+    
+    # CSS customizado para melhor aparência
+    st.markdown("""
+    <style>
+    .stRadio > div {
+        padding: 10px;
+        background-color: #1E1E1E;
+        border-radius: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    ferramenta = st.radio(
+        "Selecione a Ferramenta:", 
+        ["Scanner & Safe Areas", "Comparador (V1 vs V2)"],
+        key="ferramenta_selector"
+    )
     
     if ferramenta == "Scanner & Safe Areas":
-        arquivo = st.file_uploader("Upload do Asset:", type=["png", "jpg", "jpeg", "mp4", "mov", "zip"])
-        modo = st.selectbox("Plataforma / Destino:", list(SAFE_AREAS.keys()))
-        if arquivo and arquivo.name.split('.')[-1].lower() in ["png", "jpg", "jpeg"]:
-            opacidade = st.slider("Opacidade da Safe Area:", 0.0, 1.0, 0.70)
-    else:
-        v1 = st.file_uploader("Versão 1 (Antiga):", type=["png", "jpg", "jpeg"])
-        v2 = st.file_uploader("Versão 2 (Nova):", type=["png", "jpg", "jpeg"])
+        st.markdown("---")
+        st.markdown("### 📤 Upload de Múltiplos Arquivos")
+        
+        arquivos = st.file_uploader(
+            "Arraste ou selecione os assets:", 
+            type=["png", "jpg", "jpeg", "mp4", "mov", "zip"],
+            accept_multiple_files=True,
+            key="multi_uploader",
+            help=f"Máximo de {MAX_FILES} arquivos por vez"
+        )
+        
+        if arquivos and len(arquivos) > MAX_FILES:
+            st.warning(f"⚠️ Muitos arquivos! Máximo: {MAX_FILES}")
+            arquivos = arquivos[:MAX_FILES]
+        
+        if arquivos and not validate_total_size(arquivos):
+            arquivos = None
+        
+        modo = st.selectbox(
+            "Plataforma / Destino:", 
+            list(SAFE_AREAS.keys()),
+            key="modo_selector"
+        )
+        
+        # Verifica se há imagens para mostrar controle de opacidade
+        tem_imagens = arquivos and any(
+            f.name.split('.')[-1].lower() in ["png", "jpg", "jpeg"] 
+            for f in arquivos
+        )
+        
+        opacidade = 0.70
+        if tem_imagens:
+            opacidade = st.slider(
+                "Opacidade da Safe Area:", 
+                0.0, 1.0, 0.70,
+                key="opacidade_slider"
+            )
+    
+    else:  # Comparador
+        st.markdown("---")
+        st.markdown("### 🔍 Comparar Duas Versões")
+        v1 = st.file_uploader("Versão 1 (Antiga):", type=["png", "jpg", "jpeg"], key="v1")
+        v2 = st.file_uploader("Versão 2 (Nova):", type=["png", "jpg", "jpeg"], key="v2")
 
 # --- Área Principal ---
-if ferramenta == "Scanner & Safe Areas" and arquivo:
-    ext = arquivo.name.split('.')[-1].lower()
-    config = SAFE_AREAS[modo]
-    col_asset, col_spacer, col_specs = st.columns([1.5, 0.1, 0.6])
+st.markdown("# 🎯 QA Hub - Smart Specs")
+st.markdown("---")
 
-    # 🌐 FLUXO HTML5 (.ZIP)
-    if ext == "zip":
-        report = validate_html5_package(arquivo)
-        with col_asset:
-            st.info(f"📦 Pacote Detectado: {arquivo.name}")
-            if report["html_found"]:
-                st.success(f"Tipo: **{report['type']}**")
-                components.html(report["raw_html"], height=500, scrolling=True)
-            else:
-                st.error("❌ Erro: Nenhum arquivo .html encontrado no ZIP.")
-        with col_specs:
-            st.markdown(f"### 🌐 {report['type']} Specs")
-            peso_ok = report["kb_size"] <= 150
-            st.metric("Peso do ZIP", f"{report['kb_size']:.1f} KB", 
-                      delta="✅ OK" if peso_ok else "❌ PESADO", 
-                      delta_color="normal" if peso_ok else "inverse")
-            if not peso_ok: st.warning("⚠️ Limite de 150KB excedido!")
-            st.metric("Formato", report["size_meta"])
-            st.metric("ClickTag", "✅ OK" if report["click_tag"] else "❌ AUSENTE")
-
-    # 📽️ FLUXO VÍDEO (.MP4 / .MOV)
-    elif ext in ["mp4", "mov"]:
-        v_w, v_h, v_fps = analyze_video(arquivo)
-        with col_asset: st.video(arquivo)
-        with col_specs:
-            st.markdown("### 📽️ Vídeo Specs")
-            st.metric("Peso", get_file_size(arquivo))
-            st.metric("Resolução", f"{v_w}x{v_h}")
-            st.metric("FPS", f"{v_fps}", delta="✅ OK" if abs(v_fps-29.97)<0.1 else "❌ Erro")
-            if modo == "Adstream/TV (Manual)":
-                st.info("**Adstream Checklist:**\n- Loudness: -23/-24 LUFS\n- Timeline: Claquete(5s)+Black(2s)")
-
-    # 📊 FLUXO IMAGEM (JPG / PNG)
+if ferramenta == "Scanner & Safe Areas":
+    if not arquivos:
+        st.info("👈 **Selecione os arquivos na barra lateral para começar**")
+        
+        # Exemplo de uso
+        with st.expander("📋 Como usar"):
+            st.markdown("""
+            ### Instruções de uso:
+            1. Selecione os arquivos desejados (múltiplos permitidos)
+            2. Escolha a plataforma de destino
+            3. Ajuste a opacidade da safe area (para imagens)
+            4. Analise os resultados para cada arquivo
+            
+            ### Formatos suportados:
+            - **Imagens:** PNG, JPG, JPEG
+            - **Vídeos:** MP4, MOV
+            - **Pacotes HTML5:** ZIP
+            """)
     else:
-        img_orig = Image.open(arquivo).convert("RGBA")
-        img_with_safe = apply_safe_area(img_orig, config, opacidade)
-        with col_asset: st.image(img_with_safe, use_container_width=True)
-        with col_specs:
-            st.markdown("### 📊 Imagem Specs")
-            st.metric("Peso", get_file_size(arquivo))
-            st.metric("Dimensões", f"{img_orig.width}x{img_orig.height}")
+        # Barra de progresso
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Processa cada arquivo
+        for i, arquivo in enumerate(arquivos):
+            status_text.text(f"Processando: {arquivo.name}...")
+            
+            # Processa o arquivo
+            resultado = process_file(arquivo, modo, opacidade)
+            
+            # Exibe o resultado
+            with st.container():
+                st.markdown(f"### 📁 Arquivo {i+1} de {len(arquivos)}")
+                display_file_result(resultado, modo)
+                st.markdown("---")
+            
+            # Atualiza progresso
+            progress_bar.progress((i + 1) / len(arquivos))
+        
+        # Limpa status
+        status_text.empty()
+        progress_bar.empty()
+        
+        # Botão para limpar todos os arquivos
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🗑️ Limpar todos", type="primary", use_container_width=True):
+                # Limpa o estado dos arquivos
+                if "multi_uploader" in st.session_state:
+                    del st.session_state["multi_uploader"]
+                if "arquivos_processados" in st.session_state:
+                    del st.session_state["arquivos_processados"]
+                st.rerun()
 
-# 2. COMPARADOR
-elif ferramenta == "Comparador (V1 vs V2)" and v1 and v2:
-    c1, c2 = st.columns(2)
-    with c1: st.image(v1, caption=f"V1 - {get_file_size(v1)}", use_container_width=True)
-    with c2: st.image(v2, caption=f"V2 - {get_file_size(v2)}", use_container_width=True)
+elif ferramenta == "Comparador (V1 vs V2)":
+    if not v1 or not v2:
+        st.info("👈 **Selecione as duas versões na barra lateral para comparar**")
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            img1 = Image.open(v1)
+            st.image(img1, caption=f"V1 - {get_file_size_formatted(get_file_size_bytes(v1))}", 
+                    use_container_width=True)
+            st.metric("Dimensões V1", f"{img1.width}x{img1.height}")
+        
+        with col2:
+            img2 = Image.open(v2)
+            st.image(img2, caption=f"V2 - {get_file_size_formatted(get_file_size_bytes(v2))}", 
+                    use_container_width=True)
+            st.metric("Dimensões V2", f"{img2.width}x{img2.height}")
+        
+        # Comparação rápida
+        if img1.size == img2.size:
+            st.success("✅ Mesmas dimensões")
+        else:
+            st.warning("⚠️ Dimensões diferentes")
+        
+        diff_percent = abs(get_file_size_bytes(v1) - get_file_size_bytes(v2)) / max(get_file_size_bytes(v1), get_file_size_bytes(v2)) * 100
+        st.metric("Diferença de tamanho", f"{diff_percent:.1f}%")
+
+# --- Footer ---
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: gray; padding: 10px;'>
+        QA Hub - Smart Specs v2.0 | Upload múltiplo suportado | Limite: {}MB
+    </div>
+    """.format(MAX_UPLOAD_SIZE_MB),
+    unsafe_allow_html=True
+)
