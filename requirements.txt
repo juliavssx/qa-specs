@@ -1,4 +1,11 @@
+<<<<<<< HEAD
 streamlit==1.28.1
 moviepy==1.0.3
 Pillow==10.1.0
 beautifulsoup4==4.12.2
+=======
+streamlit
+Pillow
+opencv-python-headless
+beautifulsoup4
+>>>>>>> 26ebad566330871b4644602057d5d9fd8956f7d1
