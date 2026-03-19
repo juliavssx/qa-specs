@@ -291,8 +291,8 @@ st.markdown("# 🎯 QA Hub - Smart Specs")
 st.markdown("---")
 
 if ferramenta == "Scanner & Safe Areas":
-    if not arquivos:git add requirements.txt app.py
-        st.info("👈 **Selecione os arquivos na barra lateral para começar**")
+   if not arquivos:
+    st.info("👈 **Selecione os arquivos na barra lateral para começar**")
         
         # Exemplo de uso
         with st.expander("📋 Como usar"):
